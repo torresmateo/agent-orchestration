@@ -1,0 +1,32 @@
+# Traefik static configuration for agentvm
+# Copy to ~/.agentvm/traefik/traefik.yaml or let agentctl setup generate it
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    directory: "/Users/YOU/.agentvm/traefik/dynamic"
+    watch: true
+
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: "/Users/YOU/.agentvm/certs/agents.test.pem"
+        keyFile: "/Users/YOU/.agentvm/certs/agents.test-key.pem"
+
+api:
+  dashboard: true
+  insecure: true
+
+log:
+  level: INFO

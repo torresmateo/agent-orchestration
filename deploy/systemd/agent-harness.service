@@ -1,0 +1,16 @@
+[Unit]
+Description=Agent Harness Daemon
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/agent-config/env
+ExecStart=/usr/local/bin/agent-harness
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
