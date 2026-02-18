@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mateo/agentvm/internal/orchestrator"
 )
@@ -119,7 +123,15 @@ func (d *Daemon) Run() error {
 		return err
 	}
 
-	// Step 6: Report completion
+	// Write result report locally
+	d.writeReport(result)
+
+	// Step 6: Serve if configured
+	if d.task.ServeCommand != "" {
+		return d.serve(ctx, repoDir)
+	}
+
+	// Step 7: Report completion (non-serve mode)
 	state := "completed"
 	if result.ExitCode != 0 {
 		state = "failed"
@@ -127,12 +139,154 @@ func (d *Daemon) Run() error {
 	d.reporter.Report(d.task.AgentID, state,
 		fmt.Sprintf("Exit code: %d, Duration: %s", result.ExitCode, result.Duration))
 
-	// Write result report locally
-	d.writeReport(result)
-
 	log.Printf("Agent harness finished: state=%s exit=%d duration=%s",
 		state, result.ExitCode, result.Duration)
 	return nil
+}
+
+func (d *Daemon) serve(ctx context.Context, repoDir string) error {
+	port := d.task.ServePort
+	if port <= 0 {
+		port = 8080
+	}
+
+	log.Printf("Starting serve command: %s (port %d)", d.task.ServeCommand, port)
+	d.reporter.Report(d.task.AgentID, "serving", fmt.Sprintf("Starting serve: %s", d.task.ServeCommand))
+
+	// Launch serve command via bash -c (supports pipes, &&, etc.)
+	cmd := exec.CommandContext(ctx, "bash", "-c", d.task.ServeCommand)
+	cmd.Dir = repoDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Pass through environment
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("AGENT_ID=%s", d.task.AgentID))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("AGENT_PROJECT=%s", d.task.Project))
+	cmd.Env = append(cmd.Env, fmt.Sprintf("PORT=%d", port))
+	for k, v := range d.task.EnvVars {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	if err := cmd.Start(); err != nil {
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Serve command failed to start: %v", err))
+		return fmt.Errorf("starting serve command: %w", err)
+	}
+
+	// Wait for port to become ready (up to 5 minutes for docker builds)
+	if err := d.waitForPort(ctx, port, 5*time.Minute); err != nil {
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Port %d never became ready: %v", port, err))
+		cmd.Process.Kill()
+		return err
+	}
+
+	log.Printf("Serving on port %d", port)
+
+	// Get VM IP and register with host
+	vmIP, err := d.getVMIP()
+	if err != nil {
+		log.Printf("Warning: could not determine VM IP: %v", err)
+		vmIP = "unknown"
+	}
+
+	hostname, _ := os.Hostname()
+	if err := d.reporter.Register(
+		d.task.AgentID,
+		hostname,
+		vmIP,
+		d.task.Project,
+		d.task.Tool,
+		[]int{port},
+	); err != nil {
+		log.Printf("Warning: registration failed: %v", err)
+	} else {
+		log.Printf("Registered with host: %s -> %s:%d", d.task.AgentID, vmIP, port)
+	}
+
+	d.reporter.Report(d.task.AgentID, "serving",
+		fmt.Sprintf("Serving on port %d, registered at %s:%d", port, vmIP, port))
+
+	// Block until context is cancelled (systemd stop) or serve process exits
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- cmd.Wait()
+	}()
+
+	select {
+	case <-ctx.Done():
+		log.Println("Context cancelled, stopping serve process")
+		cmd.Process.Signal(syscall.SIGTERM)
+		// Give it 10 seconds to shut down
+		select {
+		case <-doneCh:
+		case <-time.After(10 * time.Second):
+			cmd.Process.Kill()
+		}
+		return nil
+	case err := <-doneCh:
+		if err != nil {
+			d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Serve process exited: %v", err))
+			return fmt.Errorf("serve process exited: %w", err)
+		}
+		d.reporter.Report(d.task.AgentID, "completed", "Serve process exited cleanly")
+		return nil
+	}
+}
+
+func (d *Daemon) waitForPort(ctx context.Context, port int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	log.Printf("Waiting for port %d to become ready (timeout: %s)...", port, timeout)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			log.Printf("Port %d is ready", port)
+			return nil
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return fmt.Errorf("port %d not ready after %s", port, timeout)
+}
+
+func (d *Daemon) getVMIP() (string, error) {
+	// Prefer lima0 interface (shared vmnet, routable from host)
+	// Fall back to first non-loopback IP from hostname -I
+	out, err := exec.Command("ip", "-4", "addr", "show", "lima0").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "inet ") {
+				// Format: "inet 192.168.65.34/24 ..."
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					ip := strings.Split(parts[1], "/")[0]
+					return ip, nil
+				}
+			}
+		}
+	}
+
+	// Fallback: hostname -I
+	out, err = exec.Command("hostname", "-I").Output()
+	if err != nil {
+		return "", fmt.Errorf("could not determine VM IP: %w", err)
+	}
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) == 0 {
+		return "", fmt.Errorf("no IP address found")
+	}
+	return parts[0], nil
 }
 
 func (d *Daemon) setupWorkspace(ctx context.Context) (string, error) {

@@ -88,19 +88,75 @@ func TestValidateTask_AllTools(t *testing.T) {
 	}
 }
 
-func TestWriteAndReadTaskConfig(t *testing.T) {
-	tmpDir := t.TempDir()
-	path := filepath.Join(tmpDir, "task.json")
+func TestValidateTask_ServePortDefault(t *testing.T) {
+	tc := &TaskConfig{
+		AgentID:      "agent-1",
+		Project:      "myproject",
+		RepoURL:      "https://github.com/user/repo",
+		Tool:         "claude-code",
+		Prompt:       "Fix bug",
+		ServeCommand: "docker compose up",
+	}
 
+	if err := ValidateTask(tc); err != nil {
+		t.Fatalf("expected valid, got error: %v", err)
+	}
+	if tc.ServePort != 8080 {
+		t.Errorf("expected default servePort 8080, got %d", tc.ServePort)
+	}
+}
+
+func TestValidateTask_ServePortExplicit(t *testing.T) {
+	tc := &TaskConfig{
+		AgentID:      "agent-1",
+		Project:      "myproject",
+		RepoURL:      "https://github.com/user/repo",
+		Tool:         "claude-code",
+		Prompt:       "Fix bug",
+		ServeCommand: "docker compose up",
+		ServePort:    3000,
+	}
+
+	if err := ValidateTask(tc); err != nil {
+		t.Fatalf("expected valid, got error: %v", err)
+	}
+	if tc.ServePort != 3000 {
+		t.Errorf("expected servePort 3000, got %d", tc.ServePort)
+	}
+}
+
+func TestValidateTask_NoServeNoPort(t *testing.T) {
 	tc := &TaskConfig{
 		AgentID: "agent-1",
 		Project: "myproject",
 		RepoURL: "https://github.com/user/repo",
 		Tool:    "claude-code",
-		Prompt:  "Fix the login bug",
-		MaxTime: 30,
-		Branch:  "agent/myproject/agent-1",
-		EnvVars: map[string]string{"FOO": "bar"},
+		Prompt:  "Fix bug",
+	}
+
+	if err := ValidateTask(tc); err != nil {
+		t.Fatalf("expected valid, got error: %v", err)
+	}
+	if tc.ServePort != 0 {
+		t.Errorf("expected servePort 0 when no serve command, got %d", tc.ServePort)
+	}
+}
+
+func TestWriteAndReadTaskConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "task.json")
+
+	tc := &TaskConfig{
+		AgentID:      "agent-1",
+		Project:      "myproject",
+		RepoURL:      "https://github.com/user/repo",
+		Tool:         "claude-code",
+		Prompt:       "Fix the login bug",
+		MaxTime:      30,
+		Branch:       "agent/myproject/agent-1",
+		EnvVars:      map[string]string{"FOO": "bar"},
+		ServeCommand: "docker compose up",
+		ServePort:    8080,
 	}
 
 	if err := WriteTaskConfig(tc, path); err != nil {
@@ -128,5 +184,11 @@ func TestWriteAndReadTaskConfig(t *testing.T) {
 	}
 	if loaded.EnvVars["FOO"] != "bar" {
 		t.Errorf("expected env var FOO=bar, got %s", loaded.EnvVars["FOO"])
+	}
+	if loaded.ServeCommand != "docker compose up" {
+		t.Errorf("expected serve command 'docker compose up', got %s", loaded.ServeCommand)
+	}
+	if loaded.ServePort != 8080 {
+		t.Errorf("expected serve port 8080, got %d", loaded.ServePort)
 	}
 }

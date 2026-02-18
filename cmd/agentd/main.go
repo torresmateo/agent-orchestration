@@ -59,7 +59,7 @@ func main() {
 	}
 
 	// Traefik writer
-	traefikWriter := network.NewTraefikWriter(config.BaseDir(), cfg.Network.Domain)
+	traefikWriter := network.NewTraefikWriterHTTPOnly(config.BaseDir(), cfg.Network.Domain, cfg.Network.HTTPOnly)
 
 	// Registration server (port 8090 — VMs call this)
 	regServer := registry.NewServer(store, func(reg *registry.AgentRegistration) {
@@ -125,15 +125,17 @@ func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr
 		}
 
 		result, err := orch.Dispatch(r.Context(), orchestrator.DispatchRequest{
-			Project:   req.Project,
-			RepoURL:   req.RepoURL,
-			Issue:     req.Issue,
-			Tool:      req.Tool,
-			Prompt:    req.Prompt,
-			Branch:    req.Branch,
-			MaxTime:   req.MaxTime,
-			MaxTokens: req.MaxTokens,
-			EnvVars:   req.EnvVars,
+			Project:      req.Project,
+			RepoURL:      req.RepoURL,
+			Issue:        req.Issue,
+			Tool:         req.Tool,
+			Prompt:       req.Prompt,
+			Branch:       req.Branch,
+			MaxTime:      req.MaxTime,
+			MaxTokens:    req.MaxTokens,
+			EnvVars:      req.EnvVars,
+			ServeCommand: req.ServeCommand,
+			ServePort:    req.ServePort,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})

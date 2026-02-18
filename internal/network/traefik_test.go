@@ -46,6 +46,52 @@ func TestTraefikWriter_WriteRoute(t *testing.T) {
 	if !strings.Contains(s, "websecure") {
 		t.Error("expected websecure entrypoint")
 	}
+	if !strings.Contains(s, "tls: {}") {
+		t.Error("expected tls config in non-httpOnly mode")
+	}
+}
+
+func TestTraefikWriter_WriteRouteHTTPOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+	baseDir := filepath.Join(tmpDir, "agentvm")
+	os.MkdirAll(filepath.Join(baseDir, "traefik", "dynamic"), 0755)
+
+	tw := NewTraefikWriterHTTPOnly(baseDir, "agents.test", true)
+
+	reg := &registry.AgentRegistration{
+		AgentID: "agent-1",
+		Project: "myproject",
+		VMIP:    "192.168.64.5",
+		Ports:   []int{8080},
+	}
+
+	if err := tw.WriteRoute(reg); err != nil {
+		t.Fatalf("WriteRoute failed: %v", err)
+	}
+
+	files, _ := filepath.Glob(filepath.Join(baseDir, "traefik", "dynamic", "*.yaml"))
+	if len(files) != 1 {
+		t.Fatalf("expected 1 config file, got %d", len(files))
+	}
+
+	content, _ := os.ReadFile(files[0])
+	s := string(content)
+
+	if !strings.Contains(s, "agent-1.myproject.agents.test") {
+		t.Error("expected host rule with correct subdomain")
+	}
+	if !strings.Contains(s, "192.168.64.5:8080") {
+		t.Error("expected backend URL with VM IP")
+	}
+	if strings.Contains(s, "websecure") {
+		t.Error("should NOT have websecure entrypoint in HTTP-only mode")
+	}
+	if !strings.Contains(s, "web") {
+		t.Error("expected web entrypoint in HTTP-only mode")
+	}
+	if strings.Contains(s, "tls:") {
+		t.Error("should NOT have tls config in HTTP-only mode")
+	}
 }
 
 func TestTraefikWriter_RemoveRoute(t *testing.T) {
@@ -113,5 +159,42 @@ func TestWriteStaticConfig(t *testing.T) {
 	}
 	if !strings.Contains(s, "watch: true") {
 		t.Error("expected file provider with watch")
+	}
+	if !strings.Contains(s, "tls:") {
+		t.Error("expected TLS config in default mode")
+	}
+}
+
+func TestWriteStaticConfigHTTPOnly(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := WriteStaticConfigHTTPOnly(tmpDir, 80); err != nil {
+		t.Fatalf("WriteStaticConfigHTTPOnly failed: %v", err)
+	}
+
+	path := filepath.Join(tmpDir, "traefik", "traefik.yaml")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading static config: %v", err)
+	}
+
+	s := string(content)
+	if !strings.Contains(s, ":80") {
+		t.Error("expected HTTP port 80")
+	}
+	if strings.Contains(s, ":443") {
+		t.Error("should NOT have HTTPS port in HTTP-only mode")
+	}
+	if !strings.Contains(s, "watch: true") {
+		t.Error("expected file provider with watch")
+	}
+	if strings.Contains(s, "tls:") {
+		t.Error("should NOT have TLS config in HTTP-only mode")
+	}
+	if strings.Contains(s, "websecure") {
+		t.Error("should NOT have websecure in HTTP-only mode")
+	}
+	if !strings.Contains(s, "HTTP-only") {
+		t.Error("expected HTTP-only comment")
 	}
 }

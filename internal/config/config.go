@@ -32,6 +32,7 @@ type NetworkConfig struct {
 	RegistryPort int    `yaml:"registryPort"`
 	TraefikHTTP  int    `yaml:"traefikHTTP"`
 	TraefikHTTPS int    `yaml:"traefikHTTPS"`
+	HTTPOnly     bool   `yaml:"httpOnly,omitempty"`
 }
 
 type APIConfig struct {

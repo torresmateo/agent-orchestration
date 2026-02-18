@@ -4,15 +4,17 @@ import "time"
 
 // DispatchRequest is sent from agentctl to agentd to start a new agent task.
 type DispatchRequest struct {
-	Project    string            `json:"project"`
-	RepoURL    string            `json:"repoURL"`
-	Issue      string            `json:"issue,omitempty"`
-	Tool       string            `json:"tool"`       // claude-code, opencode, amp, cline
-	Prompt     string            `json:"prompt"`
-	Branch     string            `json:"branch,omitempty"`
-	MaxTime    int               `json:"maxTime,omitempty"`    // minutes
-	MaxTokens  int               `json:"maxTokens,omitempty"`
-	EnvVars    map[string]string `json:"envVars,omitempty"`
+	Project      string            `json:"project"`
+	RepoURL      string            `json:"repoURL"`
+	Issue        string            `json:"issue,omitempty"`
+	Tool         string            `json:"tool"`       // claude-code, opencode, amp, cline
+	Prompt       string            `json:"prompt"`
+	Branch       string            `json:"branch,omitempty"`
+	MaxTime      int               `json:"maxTime,omitempty"`    // minutes
+	MaxTokens    int               `json:"maxTokens,omitempty"`
+	EnvVars      map[string]string `json:"envVars,omitempty"`
+	ServeCommand string            `json:"serveCommand,omitempty"`
+	ServePort    int               `json:"servePort,omitempty"`
 }
 
 // DispatchResponse is returned after a successful dispatch.

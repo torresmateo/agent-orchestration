@@ -48,6 +48,8 @@ func (o *Orchestrator) Dispatch(ctx context.Context, req DispatchRequest) (*Disp
 		MaxTime:      req.MaxTime,
 		MaxTokens:    req.MaxTokens,
 		EnvVars:      req.EnvVars,
+		ServeCommand: req.ServeCommand,
+		ServePort:    req.ServePort,
 		HostAddr:     o.hostAddr,
 		DispatchedAt: time.Now(),
 	}
@@ -149,13 +151,15 @@ func (o *Orchestrator) Dispatch(ctx context.Context, req DispatchRequest) (*Disp
 }
 
 type DispatchRequest struct {
-	Project   string
-	RepoURL   string
-	Issue     string
-	Tool      string
-	Prompt    string
-	Branch    string
-	MaxTime   int
-	MaxTokens int
-	EnvVars   map[string]string
+	Project      string
+	RepoURL      string
+	Issue        string
+	Tool         string
+	Prompt       string
+	Branch       string
+	MaxTime      int
+	MaxTokens    int
+	EnvVars      map[string]string
+	ServeCommand string
+	ServePort    int
 }

@@ -282,7 +282,11 @@ func dispatchCmd() *cobra.Command {
 			fmt.Printf("  Agent ID:  %s\n", resp.AgentID)
 			fmt.Printf("  VM:        %s\n", resp.VMName)
 			fmt.Printf("  IP:        %s\n", resp.VMIP)
-			fmt.Printf("  URL:       https://%s\n", resp.Subdomain)
+			if req.ServeCommand != "" {
+				fmt.Printf("  URL:       http://%s\n", resp.Subdomain)
+			} else {
+				fmt.Printf("  URL:       https://%s\n", resp.Subdomain)
+			}
 			return nil
 		},
 	}
@@ -294,6 +298,8 @@ func dispatchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&req.Branch, "branch", "", "Branch name (auto-generated if empty)")
 	cmd.Flags().IntVar(&req.MaxTime, "max-time", 30, "Max execution time in minutes")
 	cmd.Flags().StringArrayVar(&envFlags, "env", nil, "Environment variables (KEY=VALUE), can be repeated")
+	cmd.Flags().StringVar(&req.ServeCommand, "serve-cmd", "", "Command to run after push to serve the app (e.g. 'docker compose up')")
+	cmd.Flags().IntVar(&req.ServePort, "serve-port", 0, "Port the serve command listens on (default 8080)")
 	return cmd
 }
 

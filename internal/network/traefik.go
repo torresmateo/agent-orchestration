@@ -12,12 +12,21 @@ import (
 type TraefikWriter struct {
 	dynamicDir string
 	domain     string
+	httpOnly   bool
 }
 
 func NewTraefikWriter(baseDir, domain string) *TraefikWriter {
 	return &TraefikWriter{
 		dynamicDir: filepath.Join(baseDir, "traefik", "dynamic"),
 		domain:     domain,
+	}
+}
+
+func NewTraefikWriterHTTPOnly(baseDir, domain string, httpOnly bool) *TraefikWriter {
+	return &TraefikWriter{
+		dynamicDir: filepath.Join(baseDir, "traefik", "dynamic"),
+		domain:     domain,
+		httpOnly:   httpOnly,
 	}
 }
 
@@ -35,22 +44,28 @@ func (tw *TraefikWriter) WriteRoute(reg *registry.AgentRegistration) error {
 		port = reg.Ports[0]
 	}
 
+	entryPoint := "websecure"
+	tlsLine := "\n      tls: {}"
+	if tw.httpOnly {
+		entryPoint = "web"
+		tlsLine = ""
+	}
+
 	config := fmt.Sprintf(`# Auto-generated route for agent %s
 http:
   routers:
     %s:
-      rule: "Host(\x60%s\x60)"
+      rule: "Host(%s)"
       service: %s
       entryPoints:
-        - websecure
-      tls: {}
+        - %s%s
 
   services:
     %s:
       loadBalancer:
         servers:
           - url: "http://%s:%d"
-`, reg.AgentID, routerName, host, serviceName, serviceName, reg.VMIP, port)
+`, reg.AgentID, routerName, "`"+host+"`", serviceName, entryPoint, tlsLine, serviceName, reg.VMIP, port)
 
 	filename := filepath.Join(tw.dynamicDir, fmt.Sprintf("%s.yaml", routerName))
 	return os.WriteFile(filename, []byte(config), 0644)
@@ -74,10 +89,42 @@ func sanitize(s string) string {
 }
 
 func WriteStaticConfig(baseDir string, httpPort, httpsPort int) error {
-	dynamicDir := filepath.Join(baseDir, "traefik", "dynamic")
-	certsDir := filepath.Join(baseDir, "certs")
+	return WriteStaticConfigFull(baseDir, httpPort, httpsPort, false)
+}
 
-	config := fmt.Sprintf(`# Traefik static configuration for agentvm
+func WriteStaticConfigHTTPOnly(baseDir string, httpPort int) error {
+	return WriteStaticConfigFull(baseDir, httpPort, 0, true)
+}
+
+func WriteStaticConfigFull(baseDir string, httpPort, httpsPort int, httpOnly bool) error {
+	dynamicDir := filepath.Join(baseDir, "traefik", "dynamic")
+	traefikDir := filepath.Join(baseDir, "traefik")
+	if err := os.MkdirAll(traefikDir, 0755); err != nil {
+		return err
+	}
+
+	var config string
+	if httpOnly {
+		config = fmt.Sprintf(`# Traefik static configuration for agentvm (HTTP-only)
+entryPoints:
+  web:
+    address: ":%d"
+
+providers:
+  file:
+    directory: "%s"
+    watch: true
+
+api:
+  dashboard: true
+  insecure: true
+
+log:
+  level: INFO
+`, httpPort, dynamicDir)
+	} else {
+		certsDir := filepath.Join(baseDir, "certs")
+		config = fmt.Sprintf(`# Traefik static configuration for agentvm
 entryPoints:
   web:
     address: ":%d"
@@ -108,10 +155,7 @@ api:
 log:
   level: INFO
 `, httpPort, httpsPort, dynamicDir, certsDir, certsDir)
-
-	traefikDir := filepath.Join(baseDir, "traefik")
-	if err := os.MkdirAll(traefikDir, 0755); err != nil {
-		return err
 	}
+
 	return os.WriteFile(filepath.Join(traefikDir, "traefik.yaml"), []byte(config), 0644)
 }

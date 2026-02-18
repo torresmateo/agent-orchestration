@@ -8,18 +8,20 @@ import (
 )
 
 type TaskConfig struct {
-	AgentID    string            `json:"agentID"`
-	Project    string            `json:"project"`
-	RepoURL    string            `json:"repoURL"`
-	Issue      string            `json:"issue,omitempty"`
-	Tool       string            `json:"tool"`
-	Prompt     string            `json:"prompt"`
-	Branch     string            `json:"branch"`
-	MaxTime    int               `json:"maxTime"` // minutes
-	MaxTokens  int               `json:"maxTokens,omitempty"`
-	EnvVars    map[string]string `json:"envVars,omitempty"`
-	HostAddr   string            `json:"hostAddr"`   // e.g. "host.lima.internal:8090"
-	DispatchedAt time.Time       `json:"dispatchedAt"`
+	AgentID      string            `json:"agentID"`
+	Project      string            `json:"project"`
+	RepoURL      string            `json:"repoURL"`
+	Issue        string            `json:"issue,omitempty"`
+	Tool         string            `json:"tool"`
+	Prompt       string            `json:"prompt"`
+	Branch       string            `json:"branch"`
+	MaxTime      int               `json:"maxTime"` // minutes
+	MaxTokens    int               `json:"maxTokens,omitempty"`
+	EnvVars      map[string]string `json:"envVars,omitempty"`
+	ServeCommand string            `json:"serveCommand,omitempty"`
+	ServePort    int               `json:"servePort,omitempty"`
+	HostAddr     string            `json:"hostAddr"` // e.g. "host.lima.internal:8090"
+	DispatchedAt time.Time         `json:"dispatchedAt"`
 }
 
 var validTools = map[string]bool{
@@ -47,6 +49,9 @@ func ValidateTask(tc *TaskConfig) error {
 	}
 	if tc.Branch == "" {
 		tc.Branch = fmt.Sprintf("agent/%s/%s", tc.Project, tc.AgentID)
+	}
+	if tc.ServeCommand != "" && tc.ServePort <= 0 {
+		tc.ServePort = 8080
 	}
 	return nil
 }
