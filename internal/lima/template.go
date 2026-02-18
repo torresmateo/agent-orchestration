@@ -92,17 +92,27 @@ provision:
       apt-get update
       apt-get install -y gh
 
+      # Claude Code CLI
+      npm install -g @anthropic-ai/claude-code
+
       # Install agent-harness from shared mount
       if [ -f /mnt/host-shared/bin/agent-harness ]; then
         cp /mnt/host-shared/bin/agent-harness /usr/local/bin/agent-harness
         chmod +x /usr/local/bin/agent-harness
       fi
 
-      # Create config directory
+      # Create config directory (writable by lima user for task injection)
       mkdir -p /etc/agent-config
+      chmod 777 /etc/agent-config
 
-      # Install systemd service for agent-harness
-      cat > /etc/systemd/system/agent-harness.service <<'UNIT'
+      # Configure git identity for the VM user
+      VMUSER=$(getent passwd 501 | cut -d: -f1 || echo "lima")
+      VMHOME=$(getent passwd 501 | cut -d: -f6 || echo "/home/lima")
+      sudo -u "$VMUSER" git config --global user.name "AgentVM"
+      sudo -u "$VMUSER" git config --global user.email "agentvm@localhost"
+
+      # Install systemd service for agent-harness (runs as VM user, not root)
+      cat > /etc/systemd/system/agent-harness.service <<UNIT
       [Unit]
       Description=Agent Harness Daemon
       After=network-online.target docker.service
@@ -110,6 +120,8 @@ provision:
 
       [Service]
       Type=simple
+      User=$VMUSER
+      WorkingDirectory=$VMHOME
       EnvironmentFile=-/etc/agent-config/env
       ExecStart=/usr/local/bin/agent-harness
       Restart=on-failure

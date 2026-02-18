@@ -153,6 +153,20 @@ func (m *Manager) Replenish(ctx context.Context) {
 
 	log.Printf("Pool replenish: creating %d warm VMs", needed)
 
+	// Ensure master is stopped before cloning (limactl requires this)
+	master, err := m.client.Get(ctx, m.cfg.MasterName)
+	if err != nil {
+		log.Printf("Pool replenish: cannot find master %s: %v", m.cfg.MasterName, err)
+		return
+	}
+	if master.Status == lima.StatusRunning {
+		log.Printf("Pool replenish: stopping master %s for cloning...", m.cfg.MasterName)
+		if err := m.client.Stop(ctx, m.cfg.MasterName); err != nil {
+			log.Printf("Pool replenish: failed to stop master: %v", err)
+			return
+		}
+	}
+
 	for i := 0; i < needed; i++ {
 		select {
 		case <-ctx.Done():

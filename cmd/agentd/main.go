@@ -211,8 +211,8 @@ func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr
 
 		output, err := limaClient.Shell(r.Context(), lima.ShellOptions{
 			Instance: slot.Name,
-			Command:  "journalctl",
-			Args:     []string{"-u", "agent-harness.service", "--no-pager", "-n", "200"},
+			Command:  "sudo",
+			Args:     []string{"journalctl", "-u", "agent-harness.service", "--no-pager", "-n", "200"},
 			Timeout:  15 * time.Second,
 		})
 		if err != nil {

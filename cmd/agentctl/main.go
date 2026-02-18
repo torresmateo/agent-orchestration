@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -247,6 +248,7 @@ func masterSyncCmd() *cobra.Command {
 
 func dispatchCmd() *cobra.Command {
 	var req api.DispatchRequest
+	var envFlags []string
 	cmd := &cobra.Command{
 		Use:   "dispatch",
 		Short: "Dispatch a task to a new agent",
@@ -256,6 +258,18 @@ func dispatchCmd() *cobra.Command {
 			}
 			if req.Tool == "" {
 				req.Tool = "claude-code"
+			}
+
+			// Parse --env KEY=VALUE flags
+			if len(envFlags) > 0 {
+				req.EnvVars = make(map[string]string)
+				for _, e := range envFlags {
+					k, v, ok := strings.Cut(e, "=")
+					if !ok {
+						return fmt.Errorf("invalid --env format %q, expected KEY=VALUE", e)
+					}
+					req.EnvVars[k] = v
+				}
 			}
 
 			client := api.NewClient(cfg.API.Port)
@@ -279,6 +293,7 @@ func dispatchCmd() *cobra.Command {
 	cmd.Flags().StringVar(&req.Prompt, "prompt", "", "Task prompt")
 	cmd.Flags().StringVar(&req.Branch, "branch", "", "Branch name (auto-generated if empty)")
 	cmd.Flags().IntVar(&req.MaxTime, "max-time", 30, "Max execution time in minutes")
+	cmd.Flags().StringArrayVar(&envFlags, "env", nil, "Environment variables (KEY=VALUE), can be repeated")
 	return cmd
 }
 

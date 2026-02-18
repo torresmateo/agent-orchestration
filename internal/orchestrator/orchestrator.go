@@ -72,16 +72,26 @@ func (o *Orchestrator) Dispatch(ctx context.Context, req DispatchRequest) (*Disp
 	}
 	defer os.Remove(tmpFile)
 
-	// Copy task.json into VM
+	// Copy task.json into VM (copy to /tmp first, then sudo mv — /etc is root-owned)
 	err = o.limaClient.Copy(ctx, lima.CopyOptions{
 		Instance:  slot.Name,
 		Direction: lima.CopyToVM,
 		LocalPath: tmpFile,
-		VMPath:    "/etc/agent-config/task.json",
+		VMPath:    "/tmp/task.json",
 	})
 	if err != nil {
 		o.pool.Release(slot.Name)
 		return nil, fmt.Errorf("injecting task config: %w", err)
+	}
+	_, err = o.limaClient.Shell(ctx, lima.ShellOptions{
+		Instance: slot.Name,
+		Command:  "sudo",
+		Args:     []string{"mv", "/tmp/task.json", "/etc/agent-config/task.json"},
+		Timeout:  10 * time.Second,
+	})
+	if err != nil {
+		o.pool.Release(slot.Name)
+		return nil, fmt.Errorf("moving task config: %w", err)
 	}
 
 	// Write env vars into VM
@@ -102,11 +112,21 @@ func (o *Orchestrator) Dispatch(ctx context.Context, req DispatchRequest) (*Disp
 		Instance:  slot.Name,
 		Direction: lima.CopyToVM,
 		LocalPath: envTmp,
-		VMPath:    "/etc/agent-config/env",
+		VMPath:    "/tmp/env",
 	})
 	if err != nil {
 		o.pool.Release(slot.Name)
 		return nil, fmt.Errorf("injecting env config: %w", err)
+	}
+	_, err = o.limaClient.Shell(ctx, lima.ShellOptions{
+		Instance: slot.Name,
+		Command:  "sudo",
+		Args:     []string{"mv", "/tmp/env", "/etc/agent-config/env"},
+		Timeout:  10 * time.Second,
+	})
+	if err != nil {
+		o.pool.Release(slot.Name)
+		return nil, fmt.Errorf("moving env config: %w", err)
 	}
 
 	// Restart the harness service

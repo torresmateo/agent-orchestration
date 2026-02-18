@@ -15,8 +15,14 @@ import (
 
 const (
 	taskConfigPath = "/etc/agent-config/task.json"
-	workspaceBase  = "/home/lima/workspace"
 )
+
+func getWorkspaceBase() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "workspace")
+	}
+	return "/tmp/workspace"
+}
 
 type Daemon struct {
 	task     *orchestrator.TaskConfig
@@ -57,6 +63,19 @@ func (d *Daemon) Run() error {
 
 	// Step 1: Register with host
 	d.reporter.Report(d.task.AgentID, "starting", "Harness initializing")
+
+	// Configure git credentials if GITHUB_TOKEN is set
+	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
+		home, _ := os.UserHomeDir()
+		credFile := filepath.Join(home, ".git-credentials")
+		user := os.Getenv("GITHUB_USER")
+		if user == "" {
+			user = "git"
+		}
+		os.WriteFile(credFile, []byte(fmt.Sprintf("https://%s:%s@github.com\n", user, token)), 0600)
+		git := NewGit("")
+		git.run("config", "--global", "credential.helper", "store")
+	}
 
 	// Step 2: Setup workspace
 	repoDir, err := d.setupWorkspace(ctx)
@@ -119,12 +138,19 @@ func (d *Daemon) Run() error {
 func (d *Daemon) setupWorkspace(ctx context.Context) (string, error) {
 	d.reporter.Report(d.task.AgentID, "cloning", fmt.Sprintf("Cloning %s", d.task.RepoURL))
 
-	repoDir := filepath.Join(workspaceBase, d.task.Project)
-	if err := os.MkdirAll(workspaceBase, 0755); err != nil {
+	wsBase := getWorkspaceBase()
+	repoDir := filepath.Join(wsBase, d.task.Project)
+
+	// Clean existing workspace to handle retries and re-dispatches
+	if _, err := os.Stat(repoDir); err == nil {
+		os.RemoveAll(repoDir)
+	}
+
+	if err := os.MkdirAll(wsBase, 0755); err != nil {
 		return "", err
 	}
 
-	git := NewGit(workspaceBase)
+	git := NewGit(wsBase)
 	if err := git.Clone(d.task.RepoURL, repoDir); err != nil {
 		return "", fmt.Errorf("cloning repo: %w", err)
 	}
