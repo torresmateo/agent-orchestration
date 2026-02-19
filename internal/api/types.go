@@ -32,6 +32,8 @@ type AgentStatus struct {
 	VMIP      string        `json:"vmIP"`
 	Project   string        `json:"project"`
 	Tool      string        `json:"tool"`
+	Branch    string        `json:"branch,omitempty"`
+	Issue     string        `json:"issue,omitempty"`
 	State     string        `json:"state"` // running, completed, failed, killed
 	StartedAt time.Time     `json:"startedAt"`
 	Elapsed   time.Duration `json:"elapsed"`

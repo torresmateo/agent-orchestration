@@ -59,7 +59,11 @@ func (o *Orchestrator) Dispatch(ctx context.Context, req DispatchRequest) (*Disp
 	}
 
 	// Claim a warm VM
-	slot, err := o.pool.Claim(ctx, agentID, req.Project)
+	slot, err := o.pool.Claim(ctx, agentID, req.Project, pool.ClaimOpts{
+		Tool:   req.Tool,
+		Branch: task.Branch,
+		Issue:  req.Issue,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("claiming VM: %w", err)
 	}

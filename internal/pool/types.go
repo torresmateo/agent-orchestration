@@ -16,6 +16,9 @@ type VMSlot struct {
 	State     SlotState `json:"state"`
 	AgentID   string    `json:"agentID,omitempty"`
 	Project   string    `json:"project,omitempty"`
+	Tool      string    `json:"tool,omitempty"`
+	Branch    string    `json:"branch,omitempty"`
+	Issue     string    `json:"issue,omitempty"`
 	VMIP      string    `json:"vmIP,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	ClaimedAt time.Time `json:"claimedAt,omitempty"`

@@ -78,13 +78,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		AgentID string `json:"agentID"`
 		State   string `json:"state"`
 		Message string `json:"message,omitempty"`
+		Branch  string `json:"branch,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&report); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if err := s.store.UpdateState(report.AgentID, report.State); err != nil {
+	if err := s.store.UpdateState(report.AgentID, report.State, report.Message, report.Branch); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}

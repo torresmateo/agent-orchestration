@@ -23,11 +23,15 @@ func NewReporter(baseURL string) *Reporter {
 	}
 }
 
-func (r *Reporter) Report(agentID, state, message string) {
+// Report sends a status update to the host. Includes branch when available.
+func (r *Reporter) Report(agentID, state, message, branch string) {
 	payload := map[string]string{
 		"agentID": agentID,
 		"state":   state,
 		"message": message,
+	}
+	if branch != "" {
+		payload["branch"] = branch
 	}
 
 	data, err := json.Marshal(payload)

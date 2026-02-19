@@ -66,7 +66,7 @@ func (d *Daemon) Run() error {
 		d.task.AgentID, d.task.Project, d.task.Tool)
 
 	// Step 1: Register with host
-	d.reporter.Report(d.task.AgentID, "starting", "Harness initializing")
+	d.reporter.Report(d.task.AgentID, "starting", "Harness initializing", d.task.Branch)
 
 	// Configure git credentials if GITHUB_TOKEN is set
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
@@ -84,18 +84,18 @@ func (d *Daemon) Run() error {
 	// Step 2: Setup workspace
 	repoDir, err := d.setupWorkspace(ctx)
 	if err != nil {
-		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Workspace setup failed: %v", err))
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Workspace setup failed: %v", err), d.task.Branch)
 		return err
 	}
 
 	// Step 3: Create branch
 	git := NewGit(repoDir)
 	if err := git.CreateBranch(d.task.Branch); err != nil {
-		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Branch creation failed: %v", err))
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Branch creation failed: %v", err), d.task.Branch)
 		return err
 	}
 
-	d.reporter.Report(d.task.AgentID, "executing", fmt.Sprintf("Running %s", d.task.Tool))
+	d.reporter.Report(d.task.AgentID, "executing", fmt.Sprintf("Running %s", d.task.Tool), d.task.Branch)
 
 	// Step 4: Execute coding tool with constraints
 	constrainer := NewConstrainer(d.task.MaxTime)
@@ -106,12 +106,12 @@ func (d *Daemon) Run() error {
 		EnvVars:   d.task.EnvVars,
 	})
 	if err != nil {
-		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Execution failed: %v", err))
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Execution failed: %v", err), d.task.Branch)
 		return err
 	}
 
 	// Step 5: Push results
-	d.reporter.Report(d.task.AgentID, "pushing", "Pushing branch")
+	d.reporter.Report(d.task.AgentID, "pushing", "Pushing branch", d.task.Branch)
 	if err := git.AddAll(); err != nil {
 		log.Printf("Warning: git add failed: %v", err)
 	}
@@ -119,7 +119,7 @@ func (d *Daemon) Run() error {
 		log.Printf("Warning: git commit failed: %v", err)
 	}
 	if err := git.Push(d.task.Branch); err != nil {
-		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Push failed: %v", err))
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Push failed: %v", err), d.task.Branch)
 		return err
 	}
 
@@ -137,7 +137,7 @@ func (d *Daemon) Run() error {
 		state = "failed"
 	}
 	d.reporter.Report(d.task.AgentID, state,
-		fmt.Sprintf("Exit code: %d, Duration: %s", result.ExitCode, result.Duration))
+		fmt.Sprintf("Exit code: %d, Duration: %s", result.ExitCode, result.Duration), d.task.Branch)
 
 	log.Printf("Agent harness finished: state=%s exit=%d duration=%s",
 		state, result.ExitCode, result.Duration)
@@ -151,7 +151,7 @@ func (d *Daemon) serve(ctx context.Context, repoDir string) error {
 	}
 
 	log.Printf("Starting serve command: %s (port %d)", d.task.ServeCommand, port)
-	d.reporter.Report(d.task.AgentID, "serving", fmt.Sprintf("Starting serve: %s", d.task.ServeCommand))
+	d.reporter.Report(d.task.AgentID, "serving", fmt.Sprintf("Starting serve: %s", d.task.ServeCommand), d.task.Branch)
 
 	// Launch serve command via bash -c (supports pipes, &&, etc.)
 	cmd := exec.CommandContext(ctx, "bash", "-c", d.task.ServeCommand)
@@ -169,13 +169,13 @@ func (d *Daemon) serve(ctx context.Context, repoDir string) error {
 	}
 
 	if err := cmd.Start(); err != nil {
-		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Serve command failed to start: %v", err))
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Serve command failed to start: %v", err), d.task.Branch)
 		return fmt.Errorf("starting serve command: %w", err)
 	}
 
 	// Wait for port to become ready (up to 5 minutes for docker builds)
 	if err := d.waitForPort(ctx, port, 5*time.Minute); err != nil {
-		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Port %d never became ready: %v", port, err))
+		d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Port %d never became ready: %v", port, err), d.task.Branch)
 		cmd.Process.Kill()
 		return err
 	}
@@ -204,7 +204,7 @@ func (d *Daemon) serve(ctx context.Context, repoDir string) error {
 	}
 
 	d.reporter.Report(d.task.AgentID, "serving",
-		fmt.Sprintf("Serving on port %d, registered at %s:%d", port, vmIP, port))
+		fmt.Sprintf("Serving on port %d, registered at %s:%d", port, vmIP, port), d.task.Branch)
 
 	// Block until context is cancelled (systemd stop) or serve process exits
 	doneCh := make(chan error, 1)
@@ -225,10 +225,10 @@ func (d *Daemon) serve(ctx context.Context, repoDir string) error {
 		return nil
 	case err := <-doneCh:
 		if err != nil {
-			d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Serve process exited: %v", err))
+			d.reporter.Report(d.task.AgentID, "failed", fmt.Sprintf("Serve process exited: %v", err), d.task.Branch)
 			return fmt.Errorf("serve process exited: %w", err)
 		}
-		d.reporter.Report(d.task.AgentID, "completed", "Serve process exited cleanly")
+		d.reporter.Report(d.task.AgentID, "completed", "Serve process exited cleanly", d.task.Branch)
 		return nil
 	}
 }
@@ -290,7 +290,7 @@ func (d *Daemon) getVMIP() (string, error) {
 }
 
 func (d *Daemon) setupWorkspace(ctx context.Context) (string, error) {
-	d.reporter.Report(d.task.AgentID, "cloning", fmt.Sprintf("Cloning %s", d.task.RepoURL))
+	d.reporter.Report(d.task.AgentID, "cloning", fmt.Sprintf("Cloning %s", d.task.RepoURL), d.task.Branch)
 
 	wsBase := getWorkspaceBase()
 	repoDir := filepath.Join(wsBase, d.task.Project)

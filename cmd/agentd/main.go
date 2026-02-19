@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/mateo/agentvm/internal/orchestrator"
 	"github.com/mateo/agentvm/internal/pool"
 	"github.com/mateo/agentvm/internal/registry"
+	"github.com/mateo/agentvm/internal/ws"
 )
 
 func main() {
@@ -78,9 +81,22 @@ func main() {
 	monitor := orchestrator.NewMonitor(poolMgr, limaClient, 15*time.Second)
 	monitor.Start(ctx)
 
-	// API server (port 8091 — agentctl calls this)
+	// SSHFS Manager
+	sshfsMgr := ws.NewSSHFSManager(config.BaseDir())
+
+	// WebSocket command handler
+	cmdHandler := ws.NewCommandHandler(orch, poolMgr, store, traefikWriter, sshfsMgr)
+
+	// WebSocket hub
+	hub := ws.NewHub(store, poolMgr, cmdHandler)
+	go hub.Run()
+
+	// API server (port 8091 — agentctl + TUI call this)
 	apiMux := http.NewServeMux()
-	setupAPIRoutes(apiMux, orch, poolMgr, store, traefikWriter, cfg)
+	setupAPIRoutes(apiMux, orch, poolMgr, store, traefikWriter, cfg, limaClient, sshfsMgr)
+
+	// WebSocket endpoint
+	apiMux.HandleFunc("GET /ws", hub.ServeWS)
 
 	// Start servers
 	go func() {
@@ -97,7 +113,7 @@ func main() {
 			Addr:         addr,
 			Handler:      apiMux,
 			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 30 * time.Second,
+			WriteTimeout: 0, // Disable for WebSocket + streaming
 		}
 		if err := srv.ListenAndServe(); err != nil {
 			log.Fatalf("API server failed: %v", err)
@@ -110,12 +126,13 @@ func main() {
 	<-sigCh
 
 	log.Println("Shutting down...")
+	hub.Stop()
 	monitor.Stop()
 	poolMgr.Stop()
 	cancel()
 }
 
-func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr *pool.Manager, store *registry.Store, tw *network.TraefikWriter, cfg config.Config) {
+func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr *pool.Manager, store *registry.Store, tw *network.TraefikWriter, cfg config.Config, limaClient lima.Client, sshfsMgr *ws.SSHFSManager) {
 	// POST /dispatch
 	mux.HandleFunc("POST /dispatch", func(w http.ResponseWriter, r *http.Request) {
 		var req api.DispatchRequest
@@ -157,12 +174,20 @@ func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr
 
 		statusAgents := make([]api.AgentStatus, 0, len(agents))
 		for _, slot := range agents {
+			// Enrich with registry data if available
+			state := string(slot.State)
+			if reg, ok := store.Get(slot.AgentID); ok {
+				state = reg.State
+			}
 			statusAgents = append(statusAgents, api.AgentStatus{
 				AgentID:   slot.AgentID,
 				VMName:    slot.Name,
 				VMIP:      slot.VMIP,
 				Project:   slot.Project,
-				State:     string(slot.State),
+				Tool:      slot.Tool,
+				Branch:    slot.Branch,
+				Issue:     slot.Issue,
+				State:     state,
 				StartedAt: slot.ClaimedAt,
 				Elapsed:   time.Since(slot.ClaimedAt),
 				Subdomain: tw.SubdomainFor(slot.AgentID, slot.Project),
@@ -205,12 +230,6 @@ func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr
 			return
 		}
 
-		limaClient, err := lima.NewClient()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
-			return
-		}
-
 		output, err := limaClient.Shell(r.Context(), lima.ShellOptions{
 			Instance: slot.Name,
 			Command:  "sudo",
@@ -224,6 +243,125 @@ func setupAPIRoutes(mux *http.ServeMux, orch *orchestrator.Orchestrator, poolMgr
 
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte(output))
+	})
+
+	// GET /agents/{id}/files - browse files in agent's workspace
+	mux.HandleFunc("GET /agents/{id}/files", func(w http.ResponseWriter, r *http.Request) {
+		agentID := r.PathValue("id")
+		slot, ok := poolMgr.GetSlot(agentID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, api.ErrorResponse{Error: "agent not found"})
+			return
+		}
+
+		reqPath := r.URL.Query().Get("path")
+		if reqPath == "" {
+			reqPath = "."
+		}
+		// Sanitize path to prevent traversal
+		reqPath = filepath.Clean(reqPath)
+		if strings.HasPrefix(reqPath, "..") || strings.HasPrefix(reqPath, "/") {
+			writeJSON(w, http.StatusBadRequest, api.ErrorResponse{Error: "invalid path"})
+			return
+		}
+
+		wsBase := fmt.Sprintf("~/workspace/%s", slot.Project)
+		fullPath := fmt.Sprintf("%s/%s", wsBase, reqPath)
+
+		// Check if it's a directory or file
+		checkCmd := fmt.Sprintf("if [ -d %q ]; then echo DIR; elif [ -f %q ]; then echo FILE; else echo NONE; fi", fullPath, fullPath)
+		typeCheck, err := limaClient.Shell(r.Context(), lima.ShellOptions{
+			Instance: slot.Name,
+			Command:  "bash",
+			Args:     []string{"-c", checkCmd},
+			Timeout:  10 * time.Second,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
+			return
+		}
+
+		typeCheck = strings.TrimSpace(typeCheck)
+		switch typeCheck {
+		case "DIR":
+			// List directory contents
+			listCmd := fmt.Sprintf("ls -la --time-style=long-iso %q 2>/dev/null || ls -la %q", fullPath, fullPath)
+			output, err := limaClient.Shell(r.Context(), lima.ShellOptions{
+				Instance: slot.Name,
+				Command:  "bash",
+				Args:     []string{"-c", listCmd},
+				Timeout:  10 * time.Second,
+			})
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"type":    "directory",
+				"path":    reqPath,
+				"content": output,
+			})
+
+		case "FILE":
+			// Read file contents (limited to 100KB)
+			readCmd := fmt.Sprintf("head -c 102400 %q", fullPath)
+			output, err := limaClient.Shell(r.Context(), lima.ShellOptions{
+				Instance: slot.Name,
+				Command:  "bash",
+				Args:     []string{"-c", readCmd},
+				Timeout:  10 * time.Second,
+			})
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"type":    "file",
+				"path":    reqPath,
+				"content": output,
+			})
+
+		default:
+			writeJSON(w, http.StatusNotFound, api.ErrorResponse{Error: "path not found"})
+		}
+	})
+
+	// GET /agents/{id}/diff - git diff for agent's workspace
+	mux.HandleFunc("GET /agents/{id}/diff", func(w http.ResponseWriter, r *http.Request) {
+		agentID := r.PathValue("id")
+		slot, ok := poolMgr.GetSlot(agentID)
+		if !ok {
+			writeJSON(w, http.StatusNotFound, api.ErrorResponse{Error: "agent not found"})
+			return
+		}
+
+		wsBase := fmt.Sprintf("~/workspace/%s", slot.Project)
+		// Get diff against origin (shows all changes made by the agent)
+		diffCmd := fmt.Sprintf("cd %s && git diff HEAD 2>/dev/null || git diff 2>/dev/null || echo 'no changes'", wsBase)
+		output, err := limaClient.Shell(r.Context(), lima.ShellOptions{
+			Instance: slot.Name,
+			Command:  "bash",
+			Args:     []string{"-c", diffCmd},
+			Timeout:  15 * time.Second,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, api.ErrorResponse{Error: err.Error()})
+			return
+		}
+
+		// Also get the stat summary
+		statCmd := fmt.Sprintf("cd %s && git diff --stat HEAD 2>/dev/null || echo ''", wsBase)
+		stat, _ := limaClient.Shell(r.Context(), lima.ShellOptions{
+			Instance: slot.Name,
+			Command:  "bash",
+			Args:     []string{"-c", statCmd},
+			Timeout:  10 * time.Second,
+		})
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"diff": output,
+			"stat": strings.TrimSpace(stat),
+		})
 	})
 
 	// POST /pool/replenish

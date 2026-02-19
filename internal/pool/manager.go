@@ -51,15 +51,30 @@ func (m *Manager) Stop() {
 	close(m.stopCh)
 }
 
-func (m *Manager) Claim(ctx context.Context, agentID, project string) (*VMSlot, error) {
+// ClaimOpts holds optional metadata for claiming a VM slot.
+type ClaimOpts struct {
+	Tool   string
+	Branch string
+	Issue  string
+}
+
+func (m *Manager) Claim(ctx context.Context, agentID, project string, opts ...ClaimOpts) (*VMSlot, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	var o ClaimOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 
 	for i := range m.slots {
 		if m.slots[i].State == SlotIdle {
 			m.slots[i].State = SlotActive
 			m.slots[i].AgentID = agentID
 			m.slots[i].Project = project
+			m.slots[i].Tool = o.Tool
+			m.slots[i].Branch = o.Branch
+			m.slots[i].Issue = o.Issue
 			m.slots[i].ClaimedAt = time.Now()
 
 			// Get the VM IP
