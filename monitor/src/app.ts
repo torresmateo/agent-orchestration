@@ -148,7 +148,7 @@ export function createApp(config: AppConfig) {
   });
 
   screen.key(["s"], async () => {
-    const err = await openShell(store, wsClient);
+    const err = await openShell(store, wsClient, screen);
     if (err) {
       showMessage(screen, err, "red");
     }

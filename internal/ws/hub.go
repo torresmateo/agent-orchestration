@@ -17,6 +17,9 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
+// SubdomainFunc computes the public subdomain for an agent.
+type SubdomainFunc func(agentID, project string) string
+
 // Hub manages all WebSocket clients and broadcasts.
 type Hub struct {
 	mu      sync.RWMutex
@@ -26,25 +29,27 @@ type Hub struct {
 	unregister chan *Client
 	broadcast  chan []byte
 
-	store      *registry.Store
-	poolMgr    *pool.Manager
-	logMgr     *LogStreamManager
-	cmdHandler *CommandHandler
+	store       *registry.Store
+	poolMgr     *pool.Manager
+	logMgr      *LogStreamManager
+	cmdHandler  *CommandHandler
+	subdomainFn SubdomainFunc
 
 	stopCh chan struct{}
 }
 
 // NewHub creates a new WebSocket hub.
-func NewHub(store *registry.Store, poolMgr *pool.Manager, cmdHandler *CommandHandler) *Hub {
+func NewHub(store *registry.Store, poolMgr *pool.Manager, cmdHandler *CommandHandler, subdomainFn SubdomainFunc) *Hub {
 	h := &Hub{
-		clients:    make(map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan []byte, 256),
-		store:      store,
-		poolMgr:    poolMgr,
-		cmdHandler: cmdHandler,
-		stopCh:     make(chan struct{}),
+		clients:     make(map[*Client]bool),
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		broadcast:   make(chan []byte, 256),
+		store:       store,
+		poolMgr:     poolMgr,
+		cmdHandler:  cmdHandler,
+		subdomainFn: subdomainFn,
+		stopCh:      make(chan struct{}),
 	}
 	h.logMgr = NewLogStreamManager(h)
 	return h
@@ -193,7 +198,7 @@ func (h *Hub) LogManager() *LogStreamManager {
 func (h *Hub) handleStoreEvent(event registry.StoreEvent) {
 	switch event.Type {
 	case registry.EventAgentRegistered:
-		snap := agentRegToSnapshot(event.Agent)
+		snap := h.agentRegToSnapshot(event.Agent)
 		msg, err := MakeEnvelope(TypeAgentRegistered, AgentEventPayload{
 			AgentID: event.AgentID,
 			Agent:   snap,
@@ -282,6 +287,13 @@ func (h *Hub) buildStatusSnapshot() []byte {
 			if reg.Branch != "" {
 				snap.Branch = reg.Branch
 			}
+			if snap.Tool == "" && reg.Tool != "" {
+				snap.Tool = reg.Tool
+			}
+		}
+		// Compute subdomain
+		if h.subdomainFn != nil {
+			snap.Subdomain = h.subdomainFn(slot.AgentID, slot.Project)
 		}
 		agents = append(agents, snap)
 	}
@@ -300,11 +312,11 @@ func (h *Hub) buildStatusSnapshot() []byte {
 	return msg
 }
 
-func agentRegToSnapshot(reg *registry.AgentRegistration) *AgentSnapshot {
+func (h *Hub) agentRegToSnapshot(reg *registry.AgentRegistration) *AgentSnapshot {
 	if reg == nil {
 		return nil
 	}
-	return &AgentSnapshot{
+	snap := &AgentSnapshot{
 		AgentID:   reg.AgentID,
 		VMName:    reg.VMName,
 		VMIP:      reg.VMIP,
@@ -316,4 +328,8 @@ func agentRegToSnapshot(reg *registry.AgentRegistration) *AgentSnapshot {
 		StartedAt: reg.RegisteredAt,
 		Elapsed:   time.Since(reg.RegisteredAt).Truncate(time.Second).String(),
 	}
+	if h.subdomainFn != nil {
+		snap.Subdomain = h.subdomainFn(reg.AgentID, reg.Project)
+	}
+	return snap
 }

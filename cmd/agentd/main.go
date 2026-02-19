@@ -88,7 +88,7 @@ func main() {
 	cmdHandler := ws.NewCommandHandler(orch, poolMgr, store, traefikWriter, sshfsMgr)
 
 	// WebSocket hub
-	hub := ws.NewHub(store, poolMgr, cmdHandler)
+	hub := ws.NewHub(store, poolMgr, cmdHandler, traefikWriter.SubdomainFor)
 	go hub.Run()
 
 	// API server (port 8091 — agentctl + TUI call this)
